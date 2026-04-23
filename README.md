@@ -1,4 +1,4 @@
-# Meeting Copilot
+# TwinMind Meeting Copilot
 
 Real-time meeting copilot web app with live microphone transcription, context-aware suggestions, and follow-up chat.
 
