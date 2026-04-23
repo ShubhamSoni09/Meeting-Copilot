@@ -42,6 +42,7 @@ type SuggestionsResponse = {
   createdAt: string;
   suggestions: Suggestion[];
   error?: string;
+  details?: string;
 };
 
 type ChatMessage = {
@@ -57,6 +58,7 @@ type ChatResponse = {
   answer: string;
   createdAt: string;
   error?: string;
+  details?: string;
 };
 
 type AppSettings = {
