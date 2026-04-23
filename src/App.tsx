@@ -183,6 +183,15 @@ const CHAT_SECTION_TITLES = [
   "Next step you can take in this meeting",
   "Next step",
 ];
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const apiUrl = (path: string) => {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (!API_BASE) return normalizedPath;
+  if (API_BASE.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE}${normalizedPath.slice(4)}`;
+  }
+  return `${API_BASE}${normalizedPath}`;
+};
 
 const toUiErrorMessage = (scope: "Chat" | "Suggestions", rawMessage: string) => {
   const normalized = String(rawMessage || "").toLowerCase();
@@ -298,7 +307,7 @@ function App() {
     setIsGeneratingSuggestions(true);
     const startedAt = performance.now();
     try {
-      const response = await fetch("/api/suggestions", {
+      const response = await fetch(apiUrl("/api/suggestions"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -380,7 +389,7 @@ function App() {
 
           setStatusMessage("Transcribing latest chunk...");
 
-          const response = await fetch("/api/transcribe", {
+          const response = await fetch(apiUrl("/api/transcribe"), {
             method: "POST",
             body: formData,
           });
@@ -703,7 +712,7 @@ function App() {
         // Retry once for transient failures (5xx/network/429).
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            response = await fetch("/api/chat", {
+            response = await fetch(apiUrl("/api/chat"), {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload),
