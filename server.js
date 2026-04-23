@@ -10,6 +10,8 @@ const app = express();
 const port = Number(process.env.PORT || 8787);
 const upload = multer({ storage: multer.memoryStorage() });
 const MIN_AUDIO_BYTES = 32;
+const CHAT_MODEL_FAST = process.env.GROQ_CHAT_MODEL_FAST || "llama-3.1-8b-instant";
+const CHAT_MODEL_DEEP = process.env.GROQ_CHAT_MODEL_DEEP || "llama-3.3-70b-versatile";
 const VALID_SUGGESTION_TYPES = new Set([
   "question",
   "talking-point",
@@ -708,10 +710,12 @@ app.post("/api/chat", async (req, res) => {
         : "";
 
     const groq = new Groq({ apiKey });
+    const isSuggestionTurn = interactionSource === "suggestion";
     const makeChatCompletion = async (strictMode = false) => {
       return groq.chat.completions.create({
-        model: "openai/gpt-oss-120b",
-        temperature: 0.2,
+        model: isSuggestionTurn ? CHAT_MODEL_DEEP : CHAT_MODEL_FAST,
+        temperature: strictMode ? 0.12 : isSuggestionTurn ? 0.2 : 0.15,
+        max_tokens: isSuggestionTurn ? 280 : 220,
         messages: [
           {
             role: "system",
@@ -758,25 +762,23 @@ app.post("/api/chat", async (req, res) => {
     let completion = await makeChatCompletion(false);
     let answer = String(completion.choices[0]?.message?.content || "").trim();
 
-    const suspiciousTokenCount = countUnknownRareTokens(
-      answer,
-      transcriptContext,
-      userMessage,
-    );
-
-    if (suspiciousTokenCount >= 4) {
-      completion = await makeChatCompletion(true);
-      answer = String(completion.choices[0]?.message?.content || "").trim();
-    }
-
-    const unsupportedRatio = unsupportedContentTokenRatio(
-      answer,
-      transcriptContext,
-      userMessage,
-    );
-    if (unsupportedRatio > 0.7) {
-      completion = await makeChatCompletion(true);
-      answer = String(completion.choices[0]?.message?.content || "").trim();
+    // Keep typed-chat snappy under concurrent load; only suggestion-click turns get strict retry.
+    const allowStrictRetry = isSuggestionTurn;
+    if (allowStrictRetry) {
+      const suspiciousTokenCount = countUnknownRareTokens(
+        answer,
+        transcriptContext,
+        userMessage,
+      );
+      const unsupportedRatio = unsupportedContentTokenRatio(
+        answer,
+        transcriptContext,
+        userMessage,
+      );
+      if (suspiciousTokenCount >= 4 || unsupportedRatio > 0.7) {
+        completion = await makeChatCompletion(true);
+        answer = String(completion.choices[0]?.message?.content || "").trim();
+      }
     }
 
     answer = toPlainText(answer)
@@ -829,7 +831,9 @@ app.post("/api/chat", async (req, res) => {
           `Based on current transcript, best current read is: ${
             latestLine || "the team is still clarifying details."
           }`,
-          "Missing detail: Not available in current transcript. Could you clarify the exact decision or metric you want to lock right now?",
+          "Missing detail: Not available in current transcript.",
+          "Follow-up question: Could you clarify the exact decision or metric you want to lock right now?",
+          "Next step: confirm owner, decision target, and timeframe in one sentence so I can draft a concrete answer.",
         ].join("\n\n");
       }
     }
@@ -838,7 +842,11 @@ app.post("/api/chat", async (req, res) => {
       answer =
         interactionSource === "suggestion"
           ? buildSuggestionTagFallback()
-          : "Not available in current transcript. Please share one specific detail and I will answer precisely.";
+          : [
+              "Not available in current transcript.",
+              "Follow-up question: Which exact decision, metric, or owner should this answer focus on?",
+              "Next step: share the latest relevant line from the meeting and I will produce a meeting-ready response.",
+            ].join("\n\n");
     }
 
     if (!answer) {
