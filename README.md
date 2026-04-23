@@ -16,6 +16,21 @@ Session state is in-memory and exportable as JSON for analysis.
   - Transcription: `whisper-large-v3`
   - Suggestions + Chat: `openai/gpt-oss-120b`
 
+## Architecture Diagram 🏗️
+
+```mermaid
+flowchart LR
+  U[User in Browser] --> F[Vercel: React + Vite Frontend]
+  F -->|POST /api/transcribe| B[Render: Node + Express Backend]
+  F -->|POST /api/suggestions| B
+  F -->|POST /api/chat| B
+  B -->|Whisper transcription| G1[Groq: whisper-large-v3]
+  B -->|Suggestions + chat completions| G2[Groq: openai/gpt-oss-120b]
+  G1 --> B
+  G2 --> B
+  B --> F
+```
+
 ## Core Functionality ✨
 
 - Start/stop microphone recording 🎤

@@ -97,6 +97,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     "Each suggestion preview must be immediately useful even if not clicked.",
     "Prioritize recency: optimize for the newest 1-2 transcript lines first, use older lines only for consistency.",
     "Prioritize diversity across suggestion types when context supports it: question, talking-point, answer, fact-check, clarification.",
+    "Strict mapping: question=ask this out loud in the meeting; talking-point=statement you can say in the meeting; clarification=ask participants to clarify missing detail; fact-check=verify a claim against transcript context; answer=draft response you can give in the meeting.",
     "At least 2 different types should appear in most batches.",
     "Avoid repeating the same intent as recent suggestions unless context has materially changed.",
     "If transcript signal is weak (filler, very short, or unclear), switch to clarification-first suggestions.",
@@ -110,6 +111,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     "Each preview should be concrete and specific, not generic.",
     "Keep each preview <= 120 chars when possible.",
     "Both preview and reason must be complete sentences, not fragments.",
+    "Type behavior is strict: question/clarification previews must be direct questions to participants; talking-point/answer previews must be statements (not questions).",
     "If context is sparse, prefer clarification/question suggestions over speculation.",
     "Do not repeat suggestions that are semantically similar to recent suggestion previews.",
     "Recent transcript:",
@@ -119,6 +121,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   ].join("\n\n"),
   detailedAnswerSystemPrompt: [
     "You are TwinMind's meeting copilot answering a clicked live suggestion.",
+    "Strict mapping: Question to ask means ask this out loud in the meeting; Talking point means a statement you can say in the meeting; Clarification means ask meeting participants to clarify missing detail; Fact-check means verify a claim against transcript context; Answer means a draft response you can give in the meeting.",
     "Ground every factual claim in transcript context only.",
     "Do not invent names, companies, job titles, architecture details, tools, products, ownership, or numbers.",
     "Keep the answer brief and live-meeting friendly (typically 60-120 words).",

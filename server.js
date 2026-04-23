@@ -17,6 +17,14 @@ const VALID_SUGGESTION_TYPES = new Set([
   "fact-check",
   "clarification",
 ]);
+const SUGGESTION_TYPE_MAPPING_GUIDANCE = [
+  "Type mapping is strict:",
+  "question = ask this out loud in the meeting.",
+  "talking-point = statement the speaker can say in the meeting.",
+  "clarification = ask meeting participants to clarify missing detail.",
+  "fact-check = verify a claim against transcript context.",
+  "answer = draft response the speaker can give in the meeting.",
+].join(" ");
 
 const cleanSentence = (value, maxLength) => {
   const text = String(value || "")
@@ -33,6 +41,26 @@ const cleanSentence = (value, maxLength) => {
     return text;
   }
   return `${text}.`;
+};
+
+const normalizePreviewByType = (type, preview) => {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const text = String(preview || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  if (["question", "clarification"].includes(normalizedType)) {
+    const questionText = text.replace(/[.!]+$/, "").trim();
+    return questionText.endsWith("?") ? questionText : `${questionText}?`;
+  }
+
+  if (normalizedType === "talking-point" || normalizedType === "answer") {
+    const noQuestion = text.replace(/\?/g, ".").replace(/\s+/g, " ").trim();
+    return cleanSentence(noQuestion, 160);
+  }
+
+  return cleanSentence(text, 160);
 };
 
 const tokenizeLower = (text) =>
@@ -434,6 +462,7 @@ app.post("/api/suggestions", async (req, res) => {
                 "Each preview must be useful even if the user never clicks.",
                 "Use diverse suggestion types when context supports it: question, talking-point, answer, fact-check, clarification.",
                 "At least 2 different types should appear in most batches.",
+                SUGGESTION_TYPE_MAPPING_GUIDANCE,
                 "Ground every claim in transcript context only. Do not invent names, companies, roles, teams, tools, products, timelines, or numbers.",
                 "Prioritize what is most timely in the newest transcript lines.",
                 "Avoid near-duplicate suggestions from recent batches unless context has clearly changed.",
@@ -454,6 +483,7 @@ app.post("/api/suggestions", async (req, res) => {
                 "Return exactly 3 suggestions in the array.",
                 "Each preview should be concrete and specific, not generic.",
                 "Both preview and reason must be complete sentences, not fragments.",
+                "Respect this type behavior: question/clarification previews must be direct questions to meeting participants; talking-point/answer previews must be meeting-ready statements (not questions).",
                 "If context is sparse, prioritize clarification/question suggestions over speculation.",
                 "Recent transcript:",
                 contextText,
@@ -510,9 +540,15 @@ app.post("/api/suggestions", async (req, res) => {
         type: VALID_SUGGESTION_TYPES.has(normalizedType)
           ? normalizedType
           : "clarification",
-        preview:
-          cleanSentence(suggestion.preview, 160) ||
-          "Ask a clarifying follow-up based on the latest point.",
+        preview: (() => {
+          const suggestedType = VALID_SUGGESTION_TYPES.has(normalizedType)
+            ? normalizedType
+            : "clarification";
+          return (
+            normalizePreviewByType(suggestedType, suggestion.preview) ||
+            "Can you clarify the latest unresolved point so we can proceed?"
+          );
+        })(),
         reason:
           cleanSentence(suggestion.reason, 220) ||
           "This is timely based on the most recent transcript context.",
@@ -633,37 +669,43 @@ app.post("/api/chat", async (req, res) => {
       if (interactionTag.includes("question")) {
         return [
           "TAG MODE: Question to ask.",
-          "Ensure the response contains one explicit question the user can ask next, and that sentence must end with '?'.",
-          "In the next-step section, provide that exact question in quotes.",
+          "Output a meeting-ready question the speaker should ask other meeting members out loud.",
+          "The primary actionable line must be a single explicit question ending with '?'.",
+          "Do not ask the user to clarify something for the assistant.",
         ].join(" ");
       }
       if (interactionTag.includes("fact-check")) {
         return [
           "TAG MODE: Fact-check.",
-          "Focus on what to verify, what evidence is missing, and one concrete verification question to ask now.",
+          "State what claim should be verified against transcript evidence now.",
+          "Include one concrete verification question the speaker can ask meeting participants.",
         ].join(" ");
       }
       if (interactionTag.includes("talking point")) {
         return [
           "TAG MODE: Talking point.",
-          "Provide one strong line the speaker can say now, plus one optional backup line if needed.",
+          "Provide one strong meeting-ready statement the speaker can say now, with at most one backup line.",
         ].join(" ");
       }
       if (interactionTag.includes("clarification")) {
         return [
           "TAG MODE: Clarification.",
-          "Identify the ambiguity and provide one precise clarification question to ask immediately.",
+          "Identify the ambiguity and provide one precise clarification question to ask meeting participants immediately.",
         ].join(" ");
       }
       if (interactionTag.includes("answer")) {
         return [
           "TAG MODE: Answer.",
-          "Provide a direct, concise answer first, then one practical next step.",
+          "Provide a direct draft response the speaker can give in the meeting, then one practical next step.",
         ].join(" ");
       }
       return "";
     };
     const tagSpecificGuidance = getTagSpecificGuidance();
+    const suggestionModeGuidance =
+      interactionSource === "suggestion"
+        ? "For suggestion clicks, write meeting-ready lines for what the speaker should say or ask to meeting members. Do not ask the user to clarify things for the assistant."
+        : "";
 
     const groq = new Groq({ apiKey });
     const makeChatCompletion = async (strictMode = false) => {
@@ -683,6 +725,8 @@ app.post("/api/chat", async (req, res) => {
                 "If a requested detail is missing, say 'Not available in current transcript' once and ask one concise follow-up.",
                 "When context is missing, keep the response short and avoid generic filler.",
                 "Ask for one specific missing detail needed to answer precisely.",
+                SUGGESTION_TYPE_MAPPING_GUIDANCE,
+                suggestionModeGuidance,
                 tagSpecificGuidance,
                 "Keep responses concise and useful for a live meeting with practical next-step guidance.",
                 "Use plain text only. Do not use markdown, bold markers, headings, tables, or code blocks.",
@@ -700,7 +744,9 @@ app.post("/api/chat", async (req, res) => {
               "Transcript context:",
               transcriptContext || "No transcript captured yet.",
               "",
-              "Answer the next request as a helpful assistant.",
+              interactionSource === "suggestion"
+                ? "Respond as meeting-ready wording the speaker can say to participants (or ask participants), based on the clicked suggestion type."
+                : "Answer the next request as a helpful assistant.",
             ].join("\n"),
           },
           ...recentHistory,
@@ -742,22 +788,57 @@ app.post("/api/chat", async (req, res) => {
       transcriptContext,
       userMessage,
     );
+    const buildSuggestionTagFallback = () => {
+      if (interactionTag.includes("question")) {
+        return 'Question to ask: "Can we confirm the exact decision we need to make right now?"';
+      }
+      if (interactionTag.includes("clarification")) {
+        return 'Clarification to ask: "Can you clarify the specific detail that is still unclear so we can proceed?"';
+      }
+      if (interactionTag.includes("fact-check")) {
+        return [
+          "Fact-check target: The exact claim is not fully supported by the current transcript.",
+          'Verification question to ask: "Can we confirm this claim with the exact wording or data point from our discussion?"',
+        ].join("\n");
+      }
+      if (interactionTag.includes("talking point")) {
+        return "Talking point: Based on current transcript, we should align on one clear owner, deadline, and next action before moving on.";
+      }
+      if (interactionTag.includes("answer")) {
+        return [
+          "Draft response: Based on current transcript, the exact detail is not available yet.",
+          "Next step: Ask the group for the missing specific fact, then restate the answer clearly.",
+        ].join("\n");
+      }
+      return "Not available in current transcript. Please share one specific detail and I will answer precisely.";
+    };
     if (finalUnsupportedRatio > 0.78 && finalUnsupportedRatio <= 0.93) {
       const latestLine = String(latestEntries[latestEntries.length - 1]?.text || "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 180);
-      answer = [
-        `Based on current transcript, best current read is: ${
-          latestLine || "the team is still clarifying details."
-        }`,
-        `Missing detail: Not available in current transcript. Could you clarify the exact decision or metric you want to lock right now?`,
-      ].join("\n\n");
+      if (interactionSource === "suggestion") {
+        answer = [
+          `Based on current transcript, best current read is: ${
+            latestLine || "the team is still clarifying details."
+          }`,
+          buildSuggestionTagFallback(),
+        ].join("\n\n");
+      } else {
+        answer = [
+          `Based on current transcript, best current read is: ${
+            latestLine || "the team is still clarifying details."
+          }`,
+          "Missing detail: Not available in current transcript. Could you clarify the exact decision or metric you want to lock right now?",
+        ].join("\n\n");
+      }
     }
 
     if (finalUnsupportedRatio > 0.93) {
       answer =
-        "Not available in current transcript. Please share one specific detail and I will answer precisely.";
+        interactionSource === "suggestion"
+          ? buildSuggestionTagFallback()
+          : "Not available in current transcript. Please share one specific detail and I will answer precisely.";
     }
 
     if (!answer) {
@@ -768,6 +849,12 @@ app.post("/api/chat", async (req, res) => {
       const hasQuestionMark = /\?/.test(answer);
       if (!hasQuestionMark) {
         answer = `${answer}\n\nNext question to ask: "Can you clarify the exact point we need to decide right now?"`;
+      }
+    }
+    if (interactionSource === "suggestion" && interactionTag.includes("clarification")) {
+      const hasQuestionMark = /\?/.test(answer);
+      if (!hasQuestionMark) {
+        answer = `${answer}\n\nClarification question to ask: "Can you clarify the exact missing detail we need before deciding?"`;
       }
     }
 
